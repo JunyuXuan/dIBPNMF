@@ -1,0 +1,386 @@
+% Implementation of Depentent IBP by MCMC inference
+% 
+% from S. Willianmnson, P. Orbanz, Z. Ghahramani,(2007) 
+%      'Dependent Indian Buffet Process'
+% 
+% 
+% Input:
+%
+% Output:
+% 
+%            
+% 
+% Example of calling function:
+%
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+function [ Z L ] = dIBP( max_iteration )
+
+    % load data
+    data = loaddata();
+
+    % initialize the first inactive feature with 
+    disp(' Initialization.................. ');
+    
+    [K, alpha, alpha_para, T, N, sigma, s, s_para, rho, Z, h, g, b] = initialization();
+        
+    % start Gibbs sampling
+    disp(' Start Gibbs sampling .................. ');
+    
+    num_iteration = 1;
+    while num_iteration <= max_iteration
+        
+        disp([' ---------- interation ', num2str(num_iteration)]);
+        
+        disp('             ******************** Update Sigma ');
+        [Sigma]                     = Update_Sigma(K, T, sigma, s);
+        
+        disp('             ******************** Update b ');
+%         [b]                         = Update_b(b, g, Sigma, rho, K, alpha, Z, T);
+        
+        disp('             ******************** Update g ');
+        [g]                         = Update_g(T, Sigma, rho, h, K, N);
+        
+        disp('             ******************** Update Z ');
+        [Z]                         = Update_Z(T, N, K, b, g, Sigma, rho);
+        
+        disp('             ******************** Update h ');
+        [h]                         = Update_h(T, N, K, g, b, rho, Z, Sigma);
+         
+        disp('             ******************** Update s ');
+        [s]                         = Update_s(s, T, K, g, sigma, s_para);
+           
+        disp('             ******************** Update alpha ');
+        [alpha]                     = Update_alpha(alpha, alpha_para, K, b(K));
+        
+        
+        L(num_iteration)            = Compute_likelihood(Z);
+        disp(['             ******************** Log likelihood = ', num2str(L(num_iteration))]);
+        
+        % keep the one with maximum likelihood
+     
+        num_iteration               = num_iteration + 1;
+    end
+    
+
+end
+
+%-----------------------------------------------------------------
+% 
+%  randomly set the initial values for latent variables 
+% 
+%-----------------------------------------------------------------
+function [K, alpha, alpha_para, T, N, sigma, s, s_para, rho, Z, h, g, b] = initialization()
+
+    % 
+    alpha = 1;
+    
+    % alpha ~ Gamma(alpha_para, 1)
+    alpha_para = 1;
+
+    % truncate level
+    K = 20;
+    
+    % number of covariates
+    T = 10;
+    
+    % number of data
+    N = 100;
+     
+    % parameter of covariance function Sigma
+    sigma = 1;
+    
+    % parameter of covariance function Sigma
+    s = repmat(100, 1, K);
+    
+    % s ~ Gamma(s_para, 1)
+    s_para = 1;
+    
+    % coveratance matrix of g_k
+%     Sigma = rand(K, T, T);
+%     
+%     idx = (Sigma <= 0);
+%     
+%     Sigma(idx) = 1;
+    
+    % covarance of Gamma
+    rho = 1;
+    
+    % IBP matrix Z[t][n][k]
+    Z = rand(T, N, K);
+    
+    idx = (Z <= 0);
+    
+    Z(idx) = 0;
+    
+    idx = (Z > 0);
+    
+    Z(idx) = 1;
+    
+    %
+    h = rand(T, N, K);
+    
+    %
+    g = rand(T, K);
+    
+    %
+    b = random('unif',0,1,1, K);
+       
+end
+
+
+%-----------------------------------------------------------------
+% 
+%  compute data likelihood
+% 
+%-----------------------------------------------------------------
+function L = Compute_likelihood(Z)
+
+    L = 0;
+
+end
+
+
+%-----------------------------------------------------------------
+% 
+%  sample stick weights b(k) by Metroplis-Hasting
+% 
+%       
+% 
+%-----------------------------------------------------------------
+function b = Update_b(b, g, Sigma, rho, K, alpha, z, T)
+
+    for k = 1 : K
+        
+       if k == 1
+            samples = MH(k, 1, b(k+1), b(K), reshape(Sigma(k,:,:), [T T]), rho, g, alpha, z, T);
+       
+       else if k== K
+                samples = MH(k, b(k-1), 0, b(K), reshape(Sigma(k,:,:), [T T]), rho, g, alpha, z, T);
+            else
+                samples = MH(k, b(k-1), b(k+1), b(K), reshape(Sigma(k,:,:), [T T]), rho, g, alpha, z, T);
+            end
+       end
+       
+       b(k) = mean(samples);
+       
+    end
+    
+end
+
+%---------------------------------------------------------------
+% 
+%  sample function values g
+% 
+%       g(k) ~ N(g(k) | 0, Sigma)* TT TT N( h(n,k,t) | g(k,t), Gamma(t,t))
+%
+%          
+% 
+%---------------------------------------------------------------
+function g = Update_g(T, Sigma, rho, h, K, N)
+
+    g = zeros(T, K);
+
+%     for t = 1 : T
+       
+        for k = 1 : K
+                    
+            Sigma_k_tmp = reshape(Sigma(k, :, :), [T T]);
+            
+            rho_m = eye(T)*rho;
+            
+            C = inv( inv(Sigma_k_tmp) + inv(rho_m));
+            %C = 1/ (1/(Sigma_k_tmp+eps) + 1/(rho_m+eps) + eps);
+            %C = Sigma_k_tmp / (Sigma_k_tmp + rho_m/T) * (rho_m/T);
+
+            h_k_avg = sum(h(:, :, k), 2) / N;
+
+            mean = C /(rho_m) * h_k_avg;
+
+            g(:, k) = mvnrnd(mean, C);
+        end
+%     end
+
+end
+
+
+%---------------------------------------------------------------
+% 
+%  sample binary matrix Z
+% 
+%       z(n,k,t) ~ bernoulli(gamma(k, t))* datalikelihood
+% 
+%---------------------------------------------------------------
+function Z = Update_Z(T, N, K, b, g, Sigma, rho)
+
+    Z = zeros(T, N, K);
+
+    for t = 1 : T
+        for k = 1 : K
+            
+            sigma_k = reshape(Sigma(k, :, :), [T T]);
+            
+            sigma_tt = sigma_k(t, t);
+            
+            gamma_kt = normcdf(norminv(b(k),0,sigma_tt+rho) - g(t,k), 0, rho);
+            
+            Z(t,:,k) = binornd(1, gamma_kt, [1 N]);
+        
+        end
+         
+%         gamma_t = normcdf(norminv(b,0,sigma_tt+rho) - g(t,:), 0, rho);
+%             
+%         Z(t,:,:) = binornd(1, gamma_t, [N K]);
+        
+    end
+    
+end
+
+%---------------------------------------------------------------
+% 
+%  sample function values h
+% 
+%       h(n,k,t) ~ Gaussian(h | g, Gamma(t,t))
+% 
+%---------------------------------------------------------------
+function h = Update_h(T, N, K, g, b, rho, z, Sigma)
+
+    h = zeros(T, N, K);
+
+    for t = 1 : T
+        
+        for n = 1 : N
+        
+            for k = 1 : K
+                
+                sigma_tt = Sigma(k,t, t);
+                
+                b_t_k = norminv(b(k),0,sigma_tt+rho);
+                
+                cdf_bk = normcdf(b_t_k, g(t, k), rho);
+                
+                if z(t, n, k) > 0
+                    u = unifrnd(0, cdf_bk);
+                    
+                    h(t, n, k) = norminv(u, g(t, k), rho);
+                else                
+                    u = unifrnd(cdf_bk, 1);
+                    
+                    h(t, n, k) = norminv(u, g(t, k), rho);
+                end
+            end
+            
+        end
+                
+    end
+
+end
+
+%---------------------------------------------------------------
+% 
+%  sample alpha by M-H
+% 
+%       alpha ~ gamma(a, 1) * alpha^K * b_K^alpha
+% 
+%---------------------------------------------------------------
+function alpha = Update_alpha(alpha, alpha_para, K, b_K)
+
+    % DEFINE FUNCTION
+    func = inline('gampdf(x, alpha_para, 1) * (x^K) * (b_K^x)','x','alpha_para','K','b_K');
+    
+    % SOME CONSTANTS
+    nSamples = 5000;
+    burnIn = 800;
+
+    % INTIIALZE SAMPLER
+    x = zeros(1, nSamples);
+    x(1) = alpha;
+    t = 1;
+    accteptednum = 0;
+    
+    % RUN METROPOLIS-HASTINGS SAMPLER
+    while t < nSamples
+
+        t = t+1;
+
+        % SAMPLE FROM PROPOSAL
+        xStar = gamrnd(alpha_para, 1);
+        x_t_1 = x(t-1);
+
+        % CORRECTION FACTOR
+        q_xt1 = gampdf(x_t_1, alpha_para, 1);
+
+        q_xstar = gampdf(xStar, alpha_para, 1);
+
+        c = q_xt1 / q_xstar;
+
+        % CALCULATE THE (CORRECTED) ACCEPTANCE RATIO
+
+        p_xstar = func(xStar, alpha_para, K, b_K);
+
+        p_st1 = func(x_t_1, alpha_para, K, b_K);
+
+        p = p_xstar / p_st1;
+
+        ratio = min([1, p * c]);
+
+        % ACCEPT OR REJECT?
+        u = rand;
+        if u < ratio
+    %         fprintf('-----     MH       xstar is accepted.    \n');
+            x(t) = xStar;
+            accteptednum = accteptednum + 1;
+        else
+            x(t) = x(t-1);
+    %         fprintf('-----     MH       xstar is rejected.    \n');
+        end
+
+
+    end
+
+    
+    samples = x(burnIn:end);
+    
+    alpha = mean(samples);
+    
+    fprintf('-----     Accepted rate:  %f, alpha : %f \n', accteptednum/nSamples, alpha);
+
+end
+
+%---------------------------------------------------------------
+% 
+%  sample s by Hybrid Monte Carlo
+% 
+%       p(s) ~ normpdf(g_k, 0, Sigma(k)+rho)*gampdf(s|a,1)
+% 
+%---------------------------------------------------------------
+function s = Update_s(s, T, K, g, sigma, s_para)
+
+    for k = 1 : K
+        s(k) = HMC(s(k), T, sigma, s_para, g(:, k));
+        disp(['                             ------------ k = ', num2str(k),'   s(k) = ', num2str(s(k))]);
+    end.
+    
+end
+
+%---------------------------------------------------------------
+% 
+%  renew Sigma by new s
+%---------------------------------------------------------------
+function [Sigma]  = Update_Sigma(K, T, sigma, s)
+
+    Sigma = zeros(K, T, T);
+    
+    t = 1:T;
+    
+    for k = 1 : K
+       
+        Sigma(k, :, :) = sigma * exp(-(( repmat(t', [1 T]) - repmat(t, [T 1]) ) .^ 2 )./s(k));
+        
+    end
+    
+
+end
+
+
